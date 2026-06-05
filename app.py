@@ -93,6 +93,17 @@ FOOD_DB = {
     "แอปเปิ้ล":  {"kcal": 0.52, "prot": 0.003, "carb": 0.138,"fat": 0.002},
     "เต้าหู้":   {"kcal": 0.76, "prot": 0.081, "carb": 0.019,"fat": 0.046},
     "ผักสลัด":   {"kcal": 0.15, "prot": 0.013, "carb": 0.028,"fat": 0.002},
+    # เครื่องดื่ม (ต่อ ml)
+    "อเมริกาโน่":  {"kcal": 0.05, "prot": 0.001, "carb": 0.005,"fat": 0.0},
+    "americano":   {"kcal": 0.05, "prot": 0.001, "carb": 0.005,"fat": 0.0},
+    "coffee":      {"kcal": 0.05, "prot": 0.001, "carb": 0.005,"fat": 0.0},
+    "espresso":    {"kcal": 0.09, "prot": 0.002, "carb": 0.008,"fat": 0.0},
+    "กาแฟดำ":     {"kcal": 0.02, "prot": 0.001, "carb": 0.003,"fat": 0.0},
+    "กาแฟนม":     {"kcal": 0.46, "prot": 0.015, "carb": 0.055,"fat": 0.018},
+    "กาแฟเอสเย็น": {"kcal": 0.38, "prot": 0.010, "carb": 0.060,"fat": 0.010},
+    "ลาเต้":      {"kcal": 0.54, "prot": 0.033, "carb": 0.055,"fat": 0.020},
+    "นมสด":       {"kcal": 0.61, "prot": 0.032, "carb": 0.047,"fat": 0.033},
+    "น้ำเปล่า":   {"kcal": 0.0,  "prot": 0.0,   "carb": 0.0,  "fat": 0.0},
 }
 
 @st.cache_data(ttl=86400)
@@ -120,8 +131,9 @@ def search_open_food_facts(name):
 
 def lookup_nutrition(name, grams):
     # 1) local DB ก่อน
+    name_lower = name.lower()
     for key, val in FOOD_DB.items():
-        if key in name or name in key:
+        if key.lower() in name_lower or name_lower in key.lower():
             return {
                 "kcal": round(val["kcal"] * grams),
                 "prot": round(val["prot"] * grams, 1),
