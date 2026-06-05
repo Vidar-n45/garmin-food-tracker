@@ -46,19 +46,20 @@ def fetch_garmin(email, password, date_str):
         bb_data     = client.get_body_battery(date_str)
         stats       = client.get_stats(date_str)
         activities  = client.get_activities_by_date(date_str, date_str)
+        dto = sleep_data.get("dailySleepDTO") or {}
         return {
-            "steps": stats.get("totalSteps", 0),
-            "tdee":  stats.get("totalKilocalories", 0),
-            "active_cal": stats.get("activeKilocalories", 0),
-            "resting_hr": stats.get("restingHeartRate", 0),
-            "stress_avg": stats.get("averageStressLevel", 0),
+            "steps": stats.get("totalSteps") or 0,
+            "tdee":  stats.get("totalKilocalories") or 0,
+            "active_cal": stats.get("activeKilocalories") or 0,
+            "resting_hr": stats.get("restingHeartRate") or 0,
+            "stress_avg": stats.get("averageStressLevel") or 0,
             "body_battery": bb_data[-1]["charged"] if bb_data else 0,
-            "sleep_duration": sleep_data.get("dailySleepDTO", {}).get("sleepTimeSeconds", 0) // 60,
-            "sleep_deep": sleep_data.get("dailySleepDTO", {}).get("deepSleepSeconds", 0) // 60,
-            "sleep_rem":  sleep_data.get("dailySleepDTO", {}).get("remSleepSeconds", 0) // 60,
-            "sleep_light": sleep_data.get("dailySleepDTO", {}).get("lightSleepSeconds", 0) // 60,
-            "hrv": sleep_data.get("dailySleepDTO", {}).get("avgOvernightHrv", 0),
-            "spo2": sleep_data.get("dailySleepDTO", {}).get("averageSpO2Value", 0),
+            "sleep_duration": (dto.get("sleepTimeSeconds") or 0) // 60,
+            "sleep_deep":  (dto.get("deepSleepSeconds") or 0) // 60,
+            "sleep_rem":   (dto.get("remSleepSeconds") or 0) // 60,
+            "sleep_light": (dto.get("lightSleepSeconds") or 0) // 60,
+            "hrv":  dto.get("avgOvernightHrv") or 0,
+            "spo2": dto.get("averageSpO2Value") or 0,
             "activities": [
                 {
                     "name": a.get("activityName", ""),
@@ -72,7 +73,10 @@ def fetch_garmin(email, password, date_str):
     except Exception as e:
         return {"error": str(e)}
 
-# ─── nutrition lookup (simple Thai DB) ────────────────────
+# ─── nutrition lookup: local DB → Open Food Facts → fallback ──
+import requests
+import urllib.parse
+
 FOOD_DB = {
     "ข้าวกล้อง": {"kcal": 1.11, "prot": 0.026, "carb": 0.23, "fat": 0.009},
     "ข้าวขาว":   {"kcal": 1.30, "prot": 0.027, "carb": 0.28, "fat": 0.003},
@@ -91,7 +95,31 @@ FOOD_DB = {
     "ผักสลัด":   {"kcal": 0.15, "prot": 0.013, "carb": 0.028,"fat": 0.002},
 }
 
+@st.cache_data(ttl=86400)
+def search_open_food_facts(name):
+    """ค้นหาจาก Open Food Facts API — cache ไว้ 24 ชม."""
+    try:
+        query = urllib.parse.quote(name)
+        url = f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={query}&search_simple=1&action=process&json=1&page_size=5&fields=product_name,nutriments"
+        r = requests.get(url, timeout=5)
+        products = r.json().get("products", [])
+        for p in products:
+            n = p.get("nutriments", {})
+            kcal = n.get("energy-kcal_100g") or n.get("energy_100g", 0)
+            if kcal and float(kcal) > 0:
+                return {
+                    "kcal":  float(kcal) / 100,
+                    "prot":  float(n.get("proteins_100g") or 0) / 100,
+                    "carb":  float(n.get("carbohydrates_100g") or 0) / 100,
+                    "fat":   float(n.get("fat_100g") or 0) / 100,
+                    "source": p.get("product_name", name),
+                }
+    except Exception:
+        pass
+    return None
+
 def lookup_nutrition(name, grams):
+    # 1) local DB ก่อน
     for key, val in FOOD_DB.items():
         if key in name or name in key:
             return {
@@ -99,10 +127,24 @@ def lookup_nutrition(name, grams):
                 "prot": round(val["prot"] * grams, 1),
                 "carb": round(val["carb"] * grams, 1),
                 "fat":  round(val["fat"]  * grams, 1),
+                "source": "local DB",
             }
-    # fallback estimate
-    return {"kcal": round(grams * 2), "prot": round(grams * 0.05, 1),
-            "carb": round(grams * 0.15, 1), "fat": round(grams * 0.05, 1)}
+    # 2) Open Food Facts
+    off = search_open_food_facts(name)
+    if off:
+        return {
+            "kcal": round(off["kcal"] * grams),
+            "prot": round(off["prot"] * grams, 1),
+            "carb": round(off["carb"] * grams, 1),
+            "fat":  round(off["fat"]  * grams, 1),
+            "source": f"Open Food Facts: {off['source']}",
+        }
+    # 3) fallback
+    return {
+        "kcal": round(grams * 2), "prot": round(grams * 0.05, 1),
+        "carb": round(grams * 0.15, 1), "fat": round(grams * 0.05, 1),
+        "source": "ประมาณค่า",
+    }
 
 # ─── sidebar: settings ────────────────────────────────────
 with st.sidebar:
@@ -180,7 +222,8 @@ with tab_food:
         day_log.append(entry)
         log[date_str] = day_log
         save_log(log)
-        st.success(f"เพิ่ม {food_name} {food_grams}g — {macros['kcal']} kcal · P {macros['prot']}g · C {macros['carb']}g · F {macros['fat']}g")
+        src = macros.pop("source", "")
+        st.success(f"เพิ่ม {food_name} {food_grams}g — {macros['kcal']} kcal · P {macros['prot']}g · C {macros['carb']}g · F {macros['fat']}g  ({src})")
         st.rerun()
 
     # food list
