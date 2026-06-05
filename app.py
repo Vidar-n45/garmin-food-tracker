@@ -74,8 +74,7 @@ def fetch_garmin(email, password, date_str):
         return {"error": str(e)}
 
 # ─── nutrition lookup: local DB → Open Food Facts → fallback ──
-import requests
-import urllib.parse
+import openfoodfacts
 
 FOOD_DB = {
     "ข้าวกล้อง": {"kcal": 1.11, "prot": 0.026, "carb": 0.23, "fat": 0.009},
@@ -106,14 +105,15 @@ FOOD_DB = {
     "น้ำเปล่า":   {"kcal": 0.0,  "prot": 0.0,   "carb": 0.0,  "fat": 0.0},
 }
 
+# สร้าง API client
+off_api = openfoodfacts.API(user_agent="HealthTracker/1.0")
+
 @st.cache_data(ttl=86400)
 def search_open_food_facts(name):
     """ค้นหาจาก Open Food Facts API — cache ไว้ 24 ชม."""
     try:
-        query = urllib.parse.quote(name)
-        url = f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={query}&search_simple=1&action=process&json=1&page_size=5&fields=product_name,nutriments"
-        r = requests.get(url, timeout=5)
-        products = r.json().get("products", [])
+        results = off_api.product.text_search(name, page_size=5)
+        products = results.get("products", [])
         for p in products:
             n = p.get("nutriments", {})
             kcal = n.get("energy-kcal_100g") or n.get("energy_100g", 0)
